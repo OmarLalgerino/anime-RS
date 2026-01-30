@@ -1,0 +1,62 @@
+import feedparser
+import json
+import requests
+import re
+import os
+
+SOURCES = {
+    "Nyaa": "https://nyaa.land/?page=rss&c=1_2&q=Arabic",
+    "Tosho": "https://www.tokyotosho.info/rss.php?terms=Arabic"
+}
+
+def clean_name(text):
+    text = re.sub(r'\[.*?\]|\(.*?\)|\d+p|HEVC|x265|x264|Hi10P|60fps|WEB-DL|AAC|Dual Audio', '', text, flags=re.I)
+    text = re.sub(r'\.mkv|\.mp4|_|-', ' ', text)
+    match = re.search(r'^(.+?)(?:\s\d+|$)', text.strip())
+    return match.group(1).strip() if match else text.strip()
+
+def get_anilist_info(anime_name):
+    query = '''
+    query ($search: String) {
+      Media (search: $search, type: ANIME) {
+        title { romaji english }
+        coverImage { extraLarge }
+        averageScore
+      }
+    }
+    '''
+    try:
+        response = requests.post('https://graphql.anilist.co', json={'query': query, 'variables': {'search': anime_name}}, timeout=10)
+        return response.json()['data']['Media'] if response.status_code == 200 else None
+    except: return None
+
+def run_beast():
+    database = {}
+    if os.path.exists('data.json'):
+        try:
+            with open('data.json', 'r', encoding='utf-8') as f:
+                old_data = json.load(f)
+                database = {item['full_title']: item for item in old_data}
+        except: database = {}
+
+    for source, url in SOURCES.items():
+        try:
+            feed = feedparser.parse(requests.get(url, timeout=10).content)
+            for entry in feed.entries:
+                if entry.title not in database:
+                    name = clean_name(entry.title)
+                    info = get_anilist_info(name)
+                    database[entry.title] = {
+                        "name": name,
+                        "url": entry.link,
+                        "logo": info['coverImage']['extraLarge'] if info else "https://via.placeholder.com/300x450?text=No+Logo",
+                        "score": info['averageScore'] if info else "N/A",
+                        "full_title": entry.title
+                    }
+        except Exception as e: print(f"Error: {e}")
+
+    with open('data.json', 'w', encoding='utf-8') as f:
+        json.dump(list(database.values()), f, ensure_ascii=False, indent=4)
+
+if __name__ == "__main__":
+    run_beast()
