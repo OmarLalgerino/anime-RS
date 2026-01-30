@@ -12,73 +12,76 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      - name: Fetch and Merge Data
+
+      - name: Install dependencies
+        run: pip install feedparser requests
+
+      - name: Fetch Anime Data
         run: |
-          pip install feedparser requests
           python - <<EOF
           import feedparser, json, os, re, requests, time
 
-          RSS_URL = "https://nyaa.land/?page=rss&q=Arabic"
+          # استخدمنا الرابط العام لضمان جلب بيانات الآن
+          RSS_URL = "https://nyaa.land/?page=rss" 
           FILE = "data.json"
           ANILIST_API = "https://graphql.anilist.co"
 
           def get_anilist_info(title):
-              query = '''
-              query (\$search: String) {
-                Media (search: \$search, type: ANIME) {
-                  title { romaji english }
-                  coverImage { extraLarge }
-                  description
-                  averageScore
-                }
-              }
-              '''
+              query = 'query (\$search: String) { Media (search: \$search, type: ANIME) { title { romaji english } coverImage { extraLarge } description averageScore } }'
               try:
-                  response = requests.post(ANILIST_API, json={'query': query, 'variables': {'search': title}})
-                  if response.status_code == 200:
-                      return response.json()['data']['Media']
+                  response = requests.post(ANILIST_API, json={'query': query, 'variables': {'search': title}}, timeout=10)
+                  return response.json()['data']['Media'] if response.status_code == 200 else None
               except: return None
-              return None
 
           feed = feedparser.parse(RSS_URL)
-          archive = json.load(open(FILE, 'r', encoding='utf-8')) if os.path.exists(FILE) else []
+          # إذا كان الملف غير موجود، نبدأ بقائمة فارغة
+          if os.path.exists(FILE):
+              with open(FILE, 'r', encoding='utf-8') as f:
+                  try: archive = json.load(f)
+                  except: archive = []
+          else: archive = []
 
-          for entry in feed.entries[:10]:
+          print(f"Found {len(feed.entries)} entries in RSS")
+
+          for entry in feed.entries[:20]: # جلب آخر 20 حلقة
               full_title = entry.title
               link = entry.link
-              # تنظيف الاسم للبحث في AniList
+              
+              # تنظيف الاسم للبحث (إزالة الجودة والمترجم)
               clean_name = re.sub(r'\[.*?\]|\(.*?\)|\d{3,4}p', '', full_title).split('-')[0].strip()
               quality = "1080p" if "1080" in full_title else "720p" if "720" in full_title else "480p"
 
+              # التحقق إذا كان الأنمي موجوداً مسبقاً
               item = next((i for i in archive if i['title'] == clean_name), None)
               if item:
                   item[quality] = link
               else:
+                  print(f"Adding new anime: {clean_name}")
                   info = get_anilist_info(clean_name)
-                  new_entry = {
+                  archive.insert(0, {
                       "title": clean_name,
                       "1080p": link if quality == "1080p" else None,
                       "720p": link if quality == "720p" else None,
                       "480p": link if quality == "480p" else None,
                       "image": info['coverImage']['extraLarge'] if info else "https://via.placeholder.com/300x450",
-                      "description": info['description'] if info else "لا يوجد وصف",
+                      "description": info['description'] if info else "No description available",
                       "score": info['averageScore'] if info else "??"
-                  }
-                  archive.insert(0, new_entry)
-                  time.sleep(0.5) # لتجنب حظر AniList (Rate limit)
+                  })
+                  time.sleep(0.5)
 
           with open(FILE, 'w', encoding='utf-8') as f:
               json.dump(archive[:100], f, indent=2, ensure_ascii=False)
           EOF
 
-      - name: Save to Repo
+      - name: Commit and Push
         run: |
-          git config --global user.name "AnimeBot"
-          git config --global user.email "bot@github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add data.json
-          git commit -m "Update: Added info from AniList" || exit 0
-          git push
+          git commit -m "Update Anime List" || exit 0
+          git push origin main
