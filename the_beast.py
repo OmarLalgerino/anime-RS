@@ -1,68 +1,52 @@
 import requests
 import re
 import csv
+import os
 
-def test_link(url):
-    """يختبر إذا كان الرابط يعمل ويعيد True أو False"""
+# مصادر البحث (مستودعات تحدث روابطها باستمرار)
+SOURCES = [
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ar.m3u",
+    "https://raw.githubusercontent.com/mohammadreza-ertesh/TV-Channels/main/Arabic.m3u"
+]
+
+def check_link(url):
+    """يختبر الرابط بسرعة قبل إضافته"""
     try:
-        # نرسل طلب "HEAD" بدلاً من "GET" ليكون الفحص سريعاً جداً ولا يستهلك بيانات
-        response = requests.head(url, timeout=5, allow_redirects=True)
-        return response.status_code == 200
+        r = requests.head(url, timeout=3)
+        return r.status_code == 200
     except:
         return False
 
-def fetch_and_filter():
-    # مصدر القنوات (مثال: قنوات عربية)
-    source_url = "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ar.m3u"
-    
-    print("جاري جلب قائمة القنوات...")
-    response = requests.get(source_url)
-    if response.status_code != 200:
-        return []
-
-    # استخراج الاسم والرابط
-    pattern = r'#EXTINF:.*?,(.*?)\n(http.*?\.m3u8)'
-    matches = re.findall(pattern, response.text)
-    
+def start_update():
     valid_channels = []
-    count = 0
-    max_channels = 50  # حددنا 50 قناة فقط لأن الفحص يأخذ وقتاً
-
-    print(f"تم العثور على {len(matches)} قناة. يبدأ الفحص الآن...")
-
-    for name, url in matches:
-        if count >= max_channels:
-            break
-        
-        clean_url = url.strip()
-        # اختبار الرابط قبل إضافته
-        if test_link(clean_url):
-            print(f"✅ تعمل: {name.strip()}")
-            valid_channels.append({
-                'id': count + 1,
-                'title': name.strip(),
-                'image': 'https://via.placeholder.com/150?text=TV',
-                'url': clean_url
-            })
-            count += 1
-        else:
-            print(f"❌ معطلة: {name.strip()}")
-
-    return valid_channels
-
-def save_to_csv(channels):
-    if not channels:
-        print("لا توجد قنوات صالحة للإضافة.")
-        return
+    print("جاري جلب الروابط من GitHub...")
     
-    keys = ['id', 'title', 'image', 'url']
-    with open('database.csv', 'w', newline='', encoding='utf-8') as f:
-        dict_writer = csv.DictWriter(f, fieldnames=keys)
-        dict_writer.writeheader()
-        dict_writer.writerows(channels)
-    print(f"✅ تم تحديث الجدول بـ {len(channels)} قناة شغالّة!")
+    for source in SOURCES:
+        try:
+            response = requests.get(source)
+            # استخراج الاسم والرابط
+            matches = re.findall(r'#EXTINF:.*?,(.*?)\n(http.*?\.m3u8)', response.text)
+            
+            for name, url in matches:
+                url = url.strip()
+                # فحص أول 30 قناة لضمان السرعة وعدم فشل البوت
+                if len(valid_channels) < 30:
+                    if check_link(url):
+                        valid_channels.append({
+                            'id': len(valid_channels) + 1,
+                            'title': name.strip(),
+                            'image': 'https://via.placeholder.com/150?text=TV',
+                            'url': url
+                        })
+                        print(f"✅ تم إضافة: {name.strip()}")
+        except:
+            continue
 
-# تشغيل البوت
+    # حفظ النتائج في الجدول
+    with open('database.csv', 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=['id', 'title', 'image', 'url'])
+        writer.writeheader()
+        writer.writerows(valid_channels)
+
 if __name__ == "__main__":
-    live_data = fetch_and_filter()
-    save_to_csv(live_data)
+    start_update()
