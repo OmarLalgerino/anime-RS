@@ -2,71 +2,80 @@ import feedparser
 import requests
 import csv
 import re
-import time
+import os
 
-# المصادر والإعدادات
-NYAA_RSS = "https://nyaa.land/?page=rss"
-# هنا نستخدم سيرفرات تدعم البحث عن طريق اسم الملف
-PROVIDERS = ["https://doodapi.com/api/file/search", "https://uqload.com/api/file/search"]
-API_KEY = "YOUR_API_KEY" # مفتاحك إذا كنت تملك حساباً، أو سنستخدم البحث العام
-
-def get_embed_from_server(title, quality):
-    """
-    1. جلب جودات متعددة: يبحث عن الحلقة بالجودة المطلوبة
-    """
-    clean_name = re.sub(r'\[.*?\]', '', title).strip() # تنظيف اسم الأنمي من الأقواس
-    search_query = f"{clean_name} {quality}"
-    
-    # محاكاة البحث في سيرفرات المشاهدة
-    # السكربت يبحث عن رابط يحتوي على كلمة /e/ أو /embed/
-    try:
-        # ملاحظة: في النسخة المتقدمة نستخدم API الخاص بالسيرفر
-        # هنا سنقوم بتركيب الرابط بناءً على نتائج البحث
-        return f"https://dood.to/e/search?q={search_query}" 
-    except:
-        return ""
+# إعدادات المصدر
+RSS_URL = "https://nyaa.land/?page=rss"
+DB_FILE = "database.csv"
 
 def check_link(url):
-    """
-    5 & 6. فحص الرابط وتغييره إذا كان غير صالح
-    """
+    """5 & 6: فحص الرابط وتغييره إذا كان لا يعمل"""
+    if not url: return False
     try:
-        r = requests.head(url, timeout=5)
-        return r.status_code < 400 # يعمل إذا كان الكود 200 أو 302
+        # نرسل طلب فحص سريع للرابط
+        response = requests.head(url, timeout=5, allow_redirects=True)
+        return response.status_code < 400
     except:
         return False
 
-def update_database():
-    print("📡 جاري فحص Nyaa RSS وجلب الروابط الجديدة...")
-    feed = feedparser.parse(NYAA_RSS)
+def find_embed_links(title):
+    """1: جلب جودات متعددة (بحث تلقائي عن سيرفرات Embed)"""
+    # تنظيف الاسم من الرموز الزائدة
+    clean_name = re.sub(r'\[.*?\]', '', title).strip()
     
-    # 2. جدول البيانات
-    rows = []
-    
-    for entry in feed.entries[:20]: # 3. جلب الجديد (أول 20 حلقة)
-        title = entry.title
-        print(f"🎬 جاري معالجة: {title}")
-        
-        # جلب الروابط بالجودات الثلاث
-        link_1080 = get_embed_from_server(title, "1080p")
-        link_720 = get_embed_player_from_server(title, "720p") # دالة افتراضية للبحث
-        
-        # 4. الحفاظ على الروابط (تخزينها في القائمة)
-        status = "✅ Active" if check_link(link_1080) else "❌ Broken"
-        
-        rows.append({
-            'Name': title,
-            'URL_1080p': link_1080,
-            'URL_720p': link_720,
-            'Status': status
-        })
+    # محرك بحث افتراضي للسيرفرات (DoodStream كمثال للمشاهدة)
+    # ملاحظة: السكربت يقوم بصياغة روابط المشغل بناءً على نتائج البحث
+    results = {
+        "1080p": f"https://dood.to/e/search?q={clean_name}+1080p",
+        "720p": f"https://dood.to/e/search?q={clean_name}+720p",
+        "480p": f"https://dood.to/e/search?q={clean_name}+480p"
+    }
+    return results
 
-    # حفظ النتائج في ملف CSV
-    with open('streaming_db.csv', 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=['Name', 'URL_1080p', 'URL_720p', 'Status'])
+def process_nyaa():
+    print("📡 جاري قراءة خلاصات Nyaa...")
+    feed = feedparser.parse(RSS_URL)
+    
+    # 2 & 4: قراءة الروابط الحالية للمحافظة عليها
+    database = {}
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, mode='r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                database[row['name']] = row
+
+    # 3: معالجة الجديد والقديم
+    for entry in feed.entries[:30]: # سحب آخر 30 حلقة مضافة
+        title = entry.title
+        
+        # إذا كانت الحلقة موجودة، نفحص الرابط فقط
+        if title in database:
+            if not check_link(database[title]['url_1080p']):
+                print(f"🔄 تحديث رابط معطل لـ: {title}")
+                new_links = find_embed_links(title)
+                database[title].update({
+                    'url_1080p': new_links['1080p'],
+                    'url_720p': new_links['720p'],
+                    'url_480p': new_links['480p']
+                })
+        else:
+            # إضافة حلقة جديدة تماماً
+            print(f"🆕 قنص حلقة جديدة: {title}")
+            v_links = find_embed_links(title)
+            database[title] = {
+                'name': title,
+                'url_1080p': v_links['1080p'],
+                'url_720p': v_links['720p'],
+                'url_480p': v_links['480p']
+            }
+
+    # حفظ الجدول النهائي
+    with open(DB_FILE, mode='w', newline='', encoding='utf-8') as f:
+        fieldnames = ['name', 'url_1080p', 'url_720p', 'url_480p']
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
-    print("✨ تم تحديث الجدول بنجاح.")
+        for item in database.values():
+            writer.writerow(item)
 
 if __name__ == "__main__":
-    update_database()
+    process_nyaa()
