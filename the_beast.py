@@ -3,36 +3,37 @@ import csv
 import os
 import requests
 import re
+import cloudscraper  # لتخطي حماية المواقع في GitHub Actions
 from typing import Dict
 
-# المصادر التي حددتها
+# المصادر
 SOURCES = [
     "https://nyaa.si/?page=rss",
     "https://www.tokyotosho.info/rss.php"
 ]
 DB_FILE = 'database.csv'
 
+def get_webtor_link(url):
+    """تحويل رابط التورنت إلى رابط مشاهدة مباشرة عبر Webtor"""
+    # البحث عن الـ Info Hash (كود مكون من 40 حرف)
+    hash_match = re.search(r'btih:([a-fA-F0-9]{40})', url)
+    if hash_match:
+        info_hash = hash_match.group(1).lower()
+        return f"https://webtor.io/player/embed/{info_hash}"
+    
+    # إذا كان الرابط لا يحتوي على ماغنيت، نرجعه كما هو (أو يمكن تطويره لاحقاً)
+    return url
+
 def translate_to_arabic(text):
-    """ترجمة عناوين الأنمي إلى العربية باستخدام محرك ترجمة سريع"""
+    """ترجمة عناوين الأنمي إلى العربية"""
     try:
-        # استخدام API بسيط للترجمة (Google Translate Free API)
         url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ar&dt=t&q={requests.utils.quote(text)}"
         res = requests.get(url, timeout=5)
         return res.json()[0][0][0]
     except:
-        return text # في حال فشل الترجمة يرجع النص الأصلي
-
-def check_torrent_health(url):
-    """5 & 6: فحص الرابط إذا كان يعمل"""
-    if url.startswith('magnet:'): return True
-    try:
-        r = requests.head(url, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
-        return r.status_code < 400
-    except:
-        return False
+        return text
 
 def start_bot():
-    # 4: الحفاظ على البيانات القديمة (تراكمي)
     database = {}
     if os.path.exists(DB_FILE):
         try:
@@ -42,42 +43,42 @@ def start_bot():
                     database[row['name_en']] = row
         except: pass
 
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    print("📡 جاري قنص وترجمة روابط التورنت...")
+    # استخدام cloudscraper بدلاً من requests العادية لتفادي حظر GitHub
+    scraper = cloudscraper.create_scraper()
+    print("📡 جاري قنص الروابط وتحويلها لمشاهدة مباشرة...")
 
     for rss_url in SOURCES:
         try:
-            resp = requests.get(rss_url, headers=headers, timeout=15)
+            resp = scraper.get(rss_url, timeout=15)
             feed = feedparser.parse(resp.text)
             
-            for entry in feed.entries[:20]: # 3: سحب الجديد
+            for entry in feed.entries[:20]:
                 name_en = entry.title
-                torrent_url = entry.link
+                original_link = entry.link
                 
-                # منع التكرار وفحص الرابط
-                if name_en not in database or not check_torrent_health(database[name_en]['torrent_url']):
+                if name_en not in database:
                     print(f"🆕 معالجة: {name_en}")
                     
-                    # ترجمة العنوان للعربية
                     name_ar = translate_to_arabic(name_en)
+                    # تحويل الرابط فوراً إلى رابط Embed
+                    streaming_link = get_webtor_link(original_link)
                     
-                    # 1 & 2: جدول بالاسم العربي، الإنجليزي، والرابط
                     database[name_en] = {
                         'name_ar': name_ar,
                         'name_en': name_en,
-                        'torrent_url': torrent_url,
-                        'status': 'يعمل ✅'
+                        'torrent_url': streaming_link, # الرابط المحول
+                        'status': 'جاهز للمشاهدة 🍿'
                     }
         except Exception as e:
             print(f"❌ خطأ في المصدر: {e}")
 
-    # حفظ النتائج (القديم والجديد)
+    # حفظ النتائج
     with open(DB_FILE, 'w', newline='', encoding='utf-8') as f:
         fieldnames = ['name_ar', 'name_en', 'torrent_url', 'status']
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(database.values())
-    print(f"✨ تم التحديث! إجمالي العناصر المترجمة: {len(database)}")
+    print(f"✨ تم التحديث! الملف جاهز الآن للمشاهدة المباشرة.")
 
 if __name__ == "__main__":
     start_bot()
