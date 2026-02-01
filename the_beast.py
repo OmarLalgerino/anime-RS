@@ -1,48 +1,84 @@
 import requests
 import re
 import csv
+import cloudscraper
+
+# مصادر قنوات رياضية عامة وموثوقة
+SOURCES = [
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ar.m3u",
+    "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/s.m3u",
+    "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u"
+]
+
+# كلمات البحث عن الرياضة
+SPORTS_KEYWORDS = ['sport', 'beIN', 'SSC', 'KSA', 'Stadium', 'Abu Dhabi', 'رياضة', 'كرة']
+
+def is_token_link(url):
+    """فحص الرابط: إذا كان يحتوي على رموز طويلة أو صيغة اشتراك يرفضه"""
+    # استبعاد الروابط التي تحتوي على كلمات تدل على توكن أو اشتراك
+    token_patterns = ['token=', 'key=', 'auth', 'pass', 'user', 'session']
+    if any(pattern in url.lower() for pattern in token_patterns):
+        return True
+    
+    # استبعاد الروابط التي تحتوي على سلاسل نصية طويلة جداً (عشوائية)
+    path_segments = url.split('/')
+    for segment in path_segments:
+        if len(segment) > 20: # الرموز العشوائية عادة تكون طويلة جداً
+            return True
+    return False
 
 def check_link(url):
-    """فحص ذكي للرابط: يتأكد أن الرابط يفتح ويرسل بيانات فيديو فعلاً"""
+    """تأكد أن الرابط عام ويعمل بدون حماية"""
     try:
-        # نستخدم GET مع stream للتأكد من استجابة السيرفر الحقيقية
-        with requests.get(url, timeout=7, stream=True) as r:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        with requests.get(url, timeout=5, stream=True, headers=headers) as r:
             if r.status_code == 200:
-                # نتحقق من نوع المحتوى (يجب أن يكون ملف ميديا)
                 return True
         return False
     except:
         return False
 
 def start_process():
-    # مصدر القنوات (IPTV-ORG) المعروف بتحديثاته
-    source_url = "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/ar.m3u"
-    valid_channels = []
-    
-    print("بدء جلب القنوات وفحص الروابط... (سيتم تجاهل الروابط المعطلة)")
-    try:
-        response = requests.get(source_url, timeout=15)
-        matches = re.findall(r'#EXTINF:.*?,(.*?)\n(http.*?\.m3u8)', response.text)
-        
-        for name, url in matches:
-            if len(valid_channels) < 30: # فحص أفضل 30 قناة شغالة
-                clean_url = url.strip()
-                if check_link(clean_url):
-                    valid_channels.append({
-                        'title': name.strip(),
-                        'url': clean_url
-                    })
-                    print(f"✅ تعمل: {name.strip()}")
-                else:
-                    print(f"❌ معطلة: {name.strip()}")
+    scraper = cloudscraper.create_scraper()
+    valid_sports = []
+    seen_urls = set()
 
-        # إنشاء الجدول الجديد (اسم ورابط فقط)
-        with open('database.csv', 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=['title', 'url'])
-            writer.writerows(valid_channels)
-        print("✅ تم تحديث database.csv بنجاح!")
-    except Exception as e:
-        print(f"حدث خطأ: {e}")
+    print("🚀 جاري البحث في الـ Sports Zone عن الروابط المباشرة فقط...")
+
+    for source in SOURCES:
+        try:
+            response = scraper.get(source, timeout=15)
+            # نمط يبحث عن الاسم والرابط
+            matches = re.findall(r'#EXTINF:.*?,(.*?)\n(http.*?)\n', response.text)
+
+            for name, url in matches:
+                url = url.strip()
+                name = name.strip()
+
+                # الشروط: 
+                # 1. اسم رياضي 
+                # 2. ليس توكن 
+                # 3. لم يتكرر
+                if any(key.lower() in name.lower() for key in SPORTS_KEYWORDS):
+                    if not is_token_link(url) and url not in seen_urls:
+                        
+                        if len(valid_sports) < 50:
+                            if check_link(url):
+                                valid_sports.append({
+                                    'title': name,
+                                    'url': url
+                                })
+                                seen_urls.add(url)
+                                print(f"✅ تم إضافة: {name}")
+        except:
+            continue
+
+    # حفظ النتائج
+    with open('database.csv', 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=['title', 'url'])
+        writer.writerows(valid_sports)
+    
+    print(f"🏁 تم التحديث! تم العثور على {len(valid_sports)} قناة رياضية عامة.")
 
 if __name__ == "__main__":
     start_process()
